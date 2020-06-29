@@ -3,12 +3,16 @@ package editor;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
 import javafx.application.Application;
+import javafx.beans.value.ChangeListener;
+import javafx.beans.value.ObservableValue;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
 import javafx.event.EventType;
+import javafx.geometry.Orientation;
 import javafx.geometry.VPos;
 import javafx.scene.Group;
 import javafx.scene.Scene;
+import javafx.scene.control.ScrollBar;
 import javafx.scene.input.*;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Line;
@@ -17,6 +21,7 @@ import javafx.scene.text.Font;
 import javafx.scene.text.Text;
 import javafx.stage.Stage;
 import javafx.util.Duration;
+import javafx.scene.Cursor;
 
 import java.io.*;
 import java.util.ArrayList;
@@ -27,8 +32,8 @@ public class Editor extends Application {
 
     private static File editFile;
 
-    private static final int WINDOW_HEIGHT = 500;
-    private static final int WINDOW_WIDTH = 500;
+    private static int WINDOW_HEIGHT = 500;
+    private static int WINDOW_WIDTH = 500;
 
     private final Rectangle cursor = new Rectangle(0, 0);
 
@@ -48,16 +53,15 @@ public class Editor extends Application {
     private Group _root;
     private int contentsIndex;
 
-    private String copyContents;
     private int totalLines = 1;
 
     private int currLine = 1;
 
     private HashMap<Integer, TextObject> firstLetterInLine;
-    private double lastPositionX;
-    private double lastPositionY;
     private ArrayList<Rectangle> highlights;
     private String highlightedText;
+    private int highlightStartIndex;
+    private int highlightEndIndex;
 
     private class KeyEventHandler implements EventHandler<KeyEvent> {
 
@@ -73,6 +77,7 @@ public class Editor extends Application {
             cursor.setX(MARGIN_WIDTH);
             highlights = new ArrayList<>();
             makeCursorBlink();
+            highlightedText = "";
         }
 
         public KeyEventHandler(Group root, String contents) {
@@ -124,13 +129,16 @@ public class Editor extends Application {
                     resize(fontSize - 4);
                 } else if (code == KeyCode.C) {
                     copy();
-                } else if (code == KeyCode.P) {
+                } else if (code == KeyCode.V) {
                     paste();
                 }
             }
             else if (keyEvent.getEventType() == KeyEvent.KEY_TYPED) {
                 String characterTyped = keyEvent.getCharacter();
                 if (characterTyped.length() > 0 && characterTyped.charAt(0) != 8) {
+                    if (!highlightedText.equals("")) {
+                        backspace();
+                    }
                     TextObject addText = setCharacter(characterTyped.charAt(0));
                     UndoList nextUndo = new UndoList(contentsIndex - 1, addText, false);
                     _addedCharacters.setTail(nextUndo);
@@ -139,7 +147,6 @@ public class Editor extends Application {
                         _addedCharacters = nextUndo;
                     }
                     keyEvent.consume();
-
                 }
             } else if (keyEvent.getEventType() == KeyEvent.KEY_PRESSED) {
                 KeyCode code = keyEvent.getCode();
@@ -204,7 +211,7 @@ public class Editor extends Application {
                 }
             }
             format();
-            if (contentsIndex > 0) {
+            if (contentsIndex > 0 && contentsIndex < _contents.size()) {
                 TextObject currText = _contents.get(contentsIndex);
                 if (!currText.getText().equals("\n") && (currText.getY() != currY || currText.getX() != currX)) {
                     currX = (int) (currText.getX() + currText.getWidth() + 0.5);
@@ -213,277 +220,9 @@ public class Editor extends Application {
             }
             setCursor(currX, currY);
         }
-
-        private void backspace() {
-            if (contentsIndex <= 0) {
-                return;
-            }
-            TextObject deleteText = _contents.get(contentsIndex - 1);
-            if (deleteText.getText().equals("\n")) {
-                if (_contents.size() > 1) {
-                    TextObject temp = _contents.get(contentsIndex - 2);
-                    currX = (int) (temp.getX() + temp.getWidth() + 0.5);
-                    currY -= fontSize;
-                } else {
-                    currX = MARGIN_WIDTH;
-                    currY = 0;
-                }
-            } else {
-                currX = (int) deleteText.getX();
-                currY = (int) deleteText.getY();
-            }
-            _contents.remove(contentsIndex - 1);
-            contentsIndex -= 1;
-            UndoList nextUndo = new UndoList(contentsIndex, deleteText, true);
-            _addedCharacters.setTail(nextUndo);
-            if (_addedCharacters.getTail() != null) {
-                nextUndo.setPrev(_addedCharacters);
-                _addedCharacters = nextUndo;
-            }
-            _root.getChildren().remove(deleteText.getTextObject());
-        }
-
-        private void printContents() {
-            for (int i = 0; i < _contents.size(); i += 1) {
-                TextObject temp = _contents.get(i);
-                if (temp.getText().equals("\n")) {
-                    System.out.println();
-                } else {
-                    System.out.print(" (" + temp.getText() + "," + temp.getX() + "," + temp.getY() + ")");
-                }
-            }
-        }
-
-        private TextObject setNewLine() {
-            currX = MARGIN_WIDTH;
-            currY += fontSize;
-            currLine += 1;
-            TextObject addText = new TextObject(currX, currY, "\n", currLine);
-            _contents.add(contentsIndex, addText);
-            contentsIndex += 1;
-            return addText;
-        }
-
-        private TextObject setCharacter(char character) {
-            if (character == '*') {
-                System.out.println("entered");
-            }
-            if (character == 13) {
-                return setNewLine();
-            }
-            TextObject addText = new TextObject(currX, currY, String.valueOf(character), currLine);
-            addText.getTextObject().setTextOrigin(VPos.TOP);
-            addText.getTextObject().setFont(Font.font(fontName, fontSize));
-            currX += addText.getWidth() + 0.5;
-            _root.getChildren().add(addText.getTextObject());
-            _contents.add(contentsIndex, addText);
-            contentsIndex += 1;
-            if (currX > WINDOW_WIDTH - MARGIN_WIDTH) {
-                TextObject temp = wrapWord(contentsIndex - 1);
-                if (temp == null) {
-                    currX = MARGIN_WIDTH;
-                    currY += fontSize;
-                } else {
-                    currY = (int) temp.getY();
-                    currX = (int) (temp.getX() + temp.getWidth() + 0.5);
-                }
-                currLine += 1;
-            }
-            currLine = addText.getLine();
-            return addText;
-        }
-
-        private void format() {
-            TextObject temp;
-            int line = 1;
-            int x = MARGIN_WIDTH;
-            int y = MARGIN_HEIGHT;
-            totalLines = 1;
-            for (int i = 0; i < _contents.size(); i += 1) {
-                temp = _contents.get(i);
-                if (temp.getText().equals("*")) {
-                    System.out.println(temp.getX() + " " + temp.getY());
-                }
-                if ((int) (x + temp.getWidth() + 0.5) > WINDOW_WIDTH - MARGIN_WIDTH) {
-                    wrapWord(i);
-                    if (temp.getText().equals(" ")) {
-                        x = (int)(MARGIN_WIDTH - temp.getWidth() + 0.5);
-                    } else {
-                        x = (int) temp.getX();
-                    }
-                    y += fontSize;
-                    totalLines += 1;
-                    line += 1;
-                } else if (temp.getText().equals("\n")) {
-                    x = MARGIN_WIDTH;
-                    y += fontSize;
-                    totalLines += 1;
-                    line += 1;
-                }
-                if (x == MARGIN_WIDTH) {
-                    firstLetterInLine.put(line, temp);
-                }
-                temp.setLine(line);
-                temp.setIndex(i);
-                temp.setX(x);
-                temp.setY(y);
-                x += temp.getWidth() + 0.5;
-            }
-        }
-
-        private TextObject wrapWord(int index) {
-            ArrayList<TextObject> word = getEntireWord(index);
-            if (word.isEmpty()) {
-                return null;
-            }
-            TextObject temp = word.get(0);
-            TextObject lastLetter = word.get(word.size() - 1);
-            int x = MARGIN_WIDTH;
-            int y;
-            double width = lastLetter.getX() + lastLetter.getWidth();
-            int line;
-            if (temp.getLine() == 0) {
-                line = 0;
-            } else {
-                line = temp.getLine() + 1;
-            }
-            // below needs fixing
-            int stuff = (int)(width - temp.getX() + 0.5);
-            if (stuff > WINDOW_WIDTH - MARGIN_WIDTH * 2) {
-                y = (int) temp.getY();
-            } else {
-                y = (int) temp.getY() + fontSize;
-            }
-            //
-            for (int i = 0; i < word.size(); i += 1) {
-                temp = word.get(i);
-                temp.setX(x);
-                temp.setY(y);
-                temp.setLine(line);
-                x += temp.getWidth() + 0.5;
-                if (x >= WINDOW_WIDTH - MARGIN_WIDTH * 2) {
-                    x = MARGIN_WIDTH;
-                    y += fontSize;
-                }
-            }
-            if (!_contents.get(index).getText().equals(" ")) {
-                temp = word.get(0);
-                firstLetterInLine.put(temp.getLine(), temp);
-            }
-            return _contents.get(index);
-        }
-
-        private void undo() {
-            UndoList.Node node = _addedCharacters.getNode();
-            if (node == null) {
-                return;
-            }
-            int index = node.getIndex();
-            TextObject text = node.getText();
-            if (node.isDeleted()) {
-                _contents.add(index, text);
-                currX = (int) (text.getX() + text.getWidth() + 0.5);
-                currY = (int) text.getY();
-                _root.getChildren().add(text.getTextObject());
-            } else {
-                _contents.remove(text);
-                currX = (int) text.getX();
-                currY = (int) text.getY();
-                _root.getChildren().remove(text.getTextObject());
-            }
-            _addedCharacters = _addedCharacters.getPrev();
-            contentsIndex = index;
-        }
-
-        private void redo() {
-            if(_addedCharacters.getTail() == null) {
-                return;
-            }
-            UndoList.Node node = _addedCharacters.getTail().getNode();
-            TextObject redoText = node.getText();
-            int index = node.getIndex();
-            if (node.isDeleted()) {
-                _contents.remove(redoText);
-                contentsIndex -= 1;
-                currX = (int) redoText.getX();
-                currY = (int) redoText.getY();
-                _root.getChildren().remove(redoText.getTextObject());
-            } else {
-                _contents.add(index, redoText);
-                currX = (int) (redoText.getX() + redoText.getWidth() + 0.5);
-                currY = (int) redoText.getY();
-                _root.getChildren().add(redoText.getTextObject());
-            }
-            _addedCharacters = _addedCharacters.getTail();
-            contentsIndex = index;
-        }
-
-        private void resize(int size) {
-            fontSize = size;
-            for (int i = 0; i < _contents.size(); i += 1) {
-                _contents.get(i).getTextObject().setFont(new Font(fontName, fontSize));
-            }
-            if (contentsIndex < 0) {
-                return;
-            }
-            if (contentsIndex == 0) {
-                setCursor(MARGIN_WIDTH, 0);
-            } else {
-                TextObject temp = _contents.get(contentsIndex - 1);
-                setCursor((int) (temp.getX() + temp.getWidth() + 0.5), (int) temp.getY());
-            }
-        }
-
-        private ArrayList<TextObject> getEntireWord(int index) {
-            ArrayList<TextObject> word = new ArrayList<>();
-            int wordBeginIndex = index;
-            int wordEndIndex = index + 1;
-            while (wordBeginIndex >= 0) {
-                TextObject temp = _contents.get(wordBeginIndex);
-                if (temp.getText().equals(" ")) {
-                    break;
-                }
-                word.add(0, temp);
-                wordBeginIndex -= 1;
-            }
-            while (wordEndIndex < _contents.size()) {
-                TextObject temp = _contents.get(wordEndIndex);
-                if (_contents.get(wordEndIndex).getText().equals(" ")){
-                    break;
-                }
-                word.add(temp);
-                wordEndIndex += 1;
-            }
-            return word;
-        }
-
-        private void copy() {
-            Clipboard clipboard = Clipboard.getSystemClipboard();
-            ClipboardContent newContent = new ClipboardContent();
-            newContent.putString(highlightedText);
-            clipboard.setContent(newContent);
-        }
-
-        private void paste() {
-            Clipboard clipboard = Clipboard.getSystemClipboard();
-            String stringContents = clipboard.getString();
-            TextObject temp = null;
-            for(char c : stringContents.toCharArray()) {
-                if (c == '\n') {
-                    temp = setNewLine();
-                } else {
-                    setCharacter(c);
-                }
-            }
-            format();
-            if (temp != null) {
-                contentsIndex += stringContents.length();
-                currX = (int) (temp.getX() + temp.getWidth() + 0.5);
-                currY = (int) temp.getY();
-                currLine = temp.getLine();
-            }
-        }
     }
+
+
 
     private class CursorBlinkEventHandler implements EventHandler<ActionEvent> {
 
@@ -517,10 +256,18 @@ public class Editor extends Application {
             if (_contents.size() == 0) {
                 return;
             }
+            if (highlightedText.equals("")) {
+                setCursor(currX, currY);
+            }
             double mousePressedX = mouseEvent.getX();
             double mousePressedY = mouseEvent.getY();
             EventType eventType = mouseEvent.getEventType();
             TextObject text = findNearestText(mousePressedX, mousePressedY);
+            mousePressedX = text.getX();
+            mousePressedY = text.getY();
+            highlightedText = "";
+            highlightEndIndex = -1;
+            highlightStartIndex = -1;
             if (eventType == MouseEvent.MOUSE_PRESSED) {
                 currX = (int) text.getX();
                 currY = (int) text.getY();
@@ -535,7 +282,7 @@ public class Editor extends Application {
                 highlights.clear();
                 Rectangle newHighlight;
                 double yDifference = currY - mousePressedY;
-                if (yDifference > fontSize) {
+                if (yDifference >= fontSize) {
                     int x = (int) text.getX();
                     int startY = (int) text.getY();
                     int endY = currY;
@@ -543,67 +290,79 @@ public class Editor extends Application {
                     TextObject endText;
                     while (startY != endY) {
                         endText = findNearestText(WINDOW_WIDTH, startY);
-                        newHighlight = new Rectangle(x, startY, endText.getX() - startText.getX(), fontSize);
-                        if (endText.getText().equals("\n")) {
+                        newHighlight = setRectangle(x, startY, endText.getX() - startText.getX(), fontSize);
+                        if (endText.getText().equals("\n") || startText.getText().equals("\n")) {
                             newHighlight.setWidth(TextObject.spaceCharWidth());
+                        } else if (endText.getIndex() + 1 < _contents.size() && _contents.get(endText.getIndex() + 1).getText().equals("\n")) {
+                            newHighlight.setWidth(newHighlight.getWidth() + TextObject.spaceCharWidth());
                         }
-                        newHighlight.setFill(Color.LIGHTBLUE);
-                        highlights.add(newHighlight);
                         startY += fontSize;
                         startText = findNearestText(MARGIN_WIDTH, startY);
                         x = MARGIN_WIDTH;
                     }
-                    System.out.println(_contents.get(contentsIndex).getTextObject());
-                    newHighlight = new Rectangle(MARGIN_WIDTH, endY, _contents.get(contentsIndex).getX() - MARGIN_WIDTH, fontSize);
-                    newHighlight.setFill(Color.LIGHTBLUE);
-                    highlights.add(newHighlight);
-                } else if (Math.abs(yDifference) > fontSize) {
+                    endText = _contents.get(contentsIndex - 1);
+                    setRectangle(MARGIN_WIDTH, endY, endText.getX() + endText.getWidth() - MARGIN_WIDTH, fontSize);
+                } else if (Math.abs(yDifference) >= fontSize) {
                     int x = currX;
                     int startY = currY;
                     int endY = (int) text.getY();
                     if (contentsIndex >= _contents.size()) {
-                        newHighlight = new Rectangle(text.getX(), text.getY(), TextObject.spaceCharWidth(), fontSize);
+                        setRectangle(text.getX(), text.getY(), TextObject.spaceCharWidth(), fontSize);
                     } else {
-                        System.out.println(currX + " " + mousePressedX);
                         TextObject startText = _contents.get(contentsIndex);
+                        TextObject endText;
                         while (startY != endY) {
-                            TextObject endText = findNearestText(WINDOW_WIDTH, startY);
-                            newHighlight = new Rectangle(x, startY, endText.getX() - startText.getX(), fontSize);
-                            if (endText.getText().equals("\n")) {
+                            endText = findNearestText(WINDOW_WIDTH, startY);
+                            newHighlight = setRectangle(x, startY, endText.getX() - startText.getX(), fontSize);
+                            if (endText.getText().equals("\n") || startText.getText().equals("\n")) {
                                 newHighlight.setWidth(TextObject.spaceCharWidth());
                             }
-                            newHighlight.setFill(Color.LIGHTBLUE);
-                            highlights.add(newHighlight);
+                            else if (endText.getIndex() + 1 < _contents.size() && _contents.get(endText.getIndex() + 1).getText().equals("\n")) {
+                                newHighlight.setWidth(newHighlight.getWidth() + TextObject.spaceCharWidth());
+                            }
                             startY += fontSize;
                             startText = findNearestText(MARGIN_WIDTH, startY);
                             x = MARGIN_WIDTH;
                         }
-                        newHighlight = new Rectangle(MARGIN_WIDTH, endY, text.getX() - MARGIN_WIDTH, fontSize);
+                        endText = findNearestText(text.getX(), endY);
+                        newHighlight = setRectangle(MARGIN_WIDTH, endY, text.getX() - MARGIN_WIDTH, fontSize);
+                        if (endText.getText().equals("\n")) {
+                            newHighlight.setWidth(TextObject.spaceCharWidth());
+                        } else if ((endText.getIndex() + 1 < _contents.size() && _contents.get(endText.getIndex() + 1).getText().equals("\n"))
+                                || endText.getIndex() >= _contents.size() - 1) {
+                            newHighlight.setWidth(newHighlight.getWidth() + TextObject.spaceCharWidth());
+                        }
                     }
-                    newHighlight.setFill(Color.LIGHTBLUE);
-                    highlights.add(newHighlight);
                 } else {
                     if (mousePressedX < currX) {
-                        newHighlight = new Rectangle(text.getX(), currY, Math.abs(text.getX() - currX), fontSize);
+                        newHighlight = setRectangle(text.getX(), currY, Math.abs(text.getX() - currX), fontSize);
                     } else {
-                        newHighlight = new Rectangle(currX, currY, Math.abs(text.getX() - currX), fontSize);
+                        newHighlight = setRectangle(currX, currY, Math.abs(text.getX() - currX), fontSize);
                     }
-                    highlights.add(newHighlight);
                     if (text.getText().equals("\n")) {
                         newHighlight.setWidth(TextObject.spaceCharWidth());
                     }
-                    newHighlight.setFill(Color.LIGHTBLUE);
-                    newHighlight.toBack();
                 }
                 _root.getChildren().addAll(0, highlights);
             } else if (eventType == MouseEvent.MOUSE_RELEASED) {
-                int startIndex = Math.min(text.getIndex(), contentsIndex);
-                int endIndex = Math.max(text.getIndex(), contentsIndex);
-                for (int i = startIndex; i < endIndex; i += 1) {
+                highlightStartIndex = Math.min(text.getIndex(), contentsIndex);
+                highlightEndIndex = Math.max(text.getIndex(), contentsIndex);
+                contentsIndex = highlightStartIndex;
+                for (int i = highlightStartIndex; i < highlightEndIndex; i += 1) {
                     TextObject temp = _contents.get(i);
-                    highlightedText += temp.getText();
+                    if (temp.getText() != null) {
+                        highlightedText += temp.getText();
+                    }
                 }
             }
+        }
+
+        public Rectangle setRectangle(double x, double y, double width, double height) {
+            Rectangle newHighlight = new Rectangle(x, y, width, height);
+            highlights.add(newHighlight);
+            newHighlight.setFill(Color.LIGHTBLUE);
+            newHighlight.toBack();
+            return newHighlight;
         }
     }
 
@@ -618,6 +377,10 @@ public class Editor extends Application {
 
         public UndoList(int index, TextObject text, boolean deleted) {
             _node = new Node(index, text, deleted);
+        }
+
+        public UndoList(int index, ArrayList<TextObject> text, boolean deleted) {
+
         }
 
         public Node getNode() {
@@ -667,6 +430,335 @@ public class Editor extends Application {
                 return _deleted;
             }
         }
+    }
+
+    private void backspace() {
+        if (highlightedText.equals("")) {
+            if (contentsIndex <= 0) {
+                return;
+            }
+            TextObject deleteText = _contents.remove(contentsIndex - 1);
+            if (deleteText.getText().equals("\n")) {
+                if (_contents.size() > 1) {
+                    TextObject temp = _contents.get(contentsIndex - 2);
+                    currX = (int) (temp.getX() + temp.getWidth() + 0.5);
+                    currY -= fontSize;
+                } else {
+                    currX = MARGIN_WIDTH;
+                    currY = 0;
+                }
+            } else {
+                currX = (int) deleteText.getX();
+                currY = (int) deleteText.getY();
+            }
+            contentsIndex -= 1;
+            UndoList nextUndo = new UndoList(contentsIndex, deleteText, true);
+            _addedCharacters.setTail(nextUndo);
+            if (_addedCharacters.getTail() != null) {
+                nextUndo.setPrev(_addedCharacters);
+                _addedCharacters = nextUndo;
+            }
+            _root.getChildren().remove(deleteText.getTextObject());
+        } else {
+            TextObject firstText = _contents.get(highlightStartIndex);
+            TextObject undoText = new TextObject((int) firstText.getX(), (int) firstText.getY(), highlightedText, firstText.getIndex());
+            for (int i = highlightEndIndex; i >= highlightStartIndex; i -= 1) {
+                TextObject deleteText = _contents.remove(i);
+                if (deleteText.getText().equals("\n")) {
+                    if (_contents.size() > 1) {
+                        TextObject temp = _contents.get(i - 2);
+                        currX = (int) (temp.getX() + temp.getWidth() + 0.5);
+                        currY -= fontSize;
+                    } else {
+                        currX = MARGIN_WIDTH;
+                        currY = 0;
+                    }
+                } else {
+                    currX = (int) deleteText.getX();
+                    currY = (int) deleteText.getY();
+                }
+                _root.getChildren().remove(deleteText.getTextObject());
+            }
+            UndoList nextUndo = new UndoList(contentsIndex, undoText, true);
+            _addedCharacters.setTail(nextUndo);
+            if (_addedCharacters.getTail() != null) {
+                nextUndo.setPrev(_addedCharacters);
+                _addedCharacters = nextUndo;
+            }
+            if (firstText.getText().equals("\n")) {
+                currY = (int) firstText.getY() - fontSize;
+            } else {
+                currY = (int) firstText.getY();
+            }
+            currX = (int) firstText.getX();
+            highlightedText = "";
+            highlightStartIndex = highlightEndIndex = 0;
+            _root.getChildren().removeAll(highlights);
+        }
+    }
+
+    private void printContents() {
+        for (int i = 0; i < _contents.size(); i += 1) {
+            TextObject temp = _contents.get(i);
+            if (temp.getText().equals("\n")) {
+                System.out.println();
+            } else {
+                System.out.print(" (" + temp.getText() + "," + temp.getX() + "," + temp.getY() + ")");
+            }
+        }
+    }
+
+    private TextObject setNewLine() {
+        currX = MARGIN_WIDTH;
+        currY += fontSize;
+        currLine += 1;
+        TextObject addText = new TextObject(currX, currY, "\n", currLine);
+        _contents.add(contentsIndex, addText);
+        contentsIndex += 1;
+        return addText;
+    }
+
+    private TextObject setCharacter(char character) {
+        if (character == '*') {
+            System.out.println("entered");
+        }
+        if (character == 13) {
+            return setNewLine();
+        }
+        TextObject addText = new TextObject(currX, currY, String.valueOf(character), currLine);
+        addText.getTextObject().setTextOrigin(VPos.TOP);
+        addText.getTextObject().setFont(Font.font(fontName, fontSize));
+        currX += addText.getWidth() + 0.5;
+        _root.getChildren().add(addText.getTextObject());
+        _contents.add(contentsIndex, addText);
+        contentsIndex += 1;
+        if (currX > WINDOW_WIDTH - MARGIN_WIDTH) {
+            TextObject temp = wrapWord(contentsIndex - 1);
+            if (temp == null) {
+                currX = MARGIN_WIDTH;
+                currY += fontSize;
+            } else {
+                currY = (int) temp.getY();
+                currX = (int) (temp.getX() + temp.getWidth() + 0.5);
+            }
+            currLine += 1;
+        }
+        currLine = addText.getLine();
+        return addText;
+    }
+
+    public void format() {
+        TextObject temp;
+        int line = 1;
+        int x = MARGIN_WIDTH;
+        int y = MARGIN_HEIGHT;
+        totalLines = 1;
+        for (int i = 0; i < _contents.size(); i += 1) {
+            temp = _contents.get(i);
+            if (temp.getText().equals("*")) {
+                System.out.println(temp.getX() + " " + temp.getY());
+            }
+            if ((int) (x + temp.getWidth() + 0.5) > WINDOW_WIDTH - MARGIN_WIDTH) {
+                wrapWord(i);
+                if (temp.getText().equals(" ")) {
+                    x = (int)(MARGIN_WIDTH - temp.getWidth() + 0.5);
+                } else {
+                    x = (int) temp.getX();
+                }
+                y += fontSize;
+                totalLines += 1;
+                line += 1;
+            } else if (temp.getText().equals("\n")) {
+                x = MARGIN_WIDTH;
+                y += fontSize;
+                totalLines += 1;
+                line += 1;
+            }
+            if (x == MARGIN_WIDTH) {
+                firstLetterInLine.put(line, temp);
+            }
+            temp.setLine(line);
+            temp.setIndex(i);
+            temp.setX(x);
+            temp.setY(y);
+            x += temp.getWidth() + 0.5;
+        }
+    }
+
+    private TextObject wrapWord(int index) {
+        ArrayList<TextObject> word = getEntireWord(index);
+        if (word.isEmpty()) {
+            return null;
+        }
+        TextObject temp = word.get(0);
+        TextObject lastLetter = word.get(word.size() - 1);
+        int x = MARGIN_WIDTH;
+        int y;
+        double width = lastLetter.getX() + lastLetter.getWidth();
+        int line;
+        if (temp.getLine() == 0) {
+            line = 0;
+        } else {
+            line = temp.getLine() + 1;
+        }
+        // below needs fixing
+        int stuff = (int)(width - temp.getX() + 0.5);
+        if (stuff > WINDOW_WIDTH - MARGIN_WIDTH * 2) {
+            y = (int) temp.getY();
+        } else {
+            y = (int) temp.getY() + fontSize;
+        }
+        //
+        for (int i = 0; i < word.size(); i += 1) {
+            temp = word.get(i);
+            temp.setX(x);
+            temp.setY(y);
+            temp.setLine(line);
+            x += temp.getWidth() + 0.5;
+            if (x >= WINDOW_WIDTH - MARGIN_WIDTH * 2) {
+                x = MARGIN_WIDTH;
+                y += fontSize;
+            }
+        }
+        if (!_contents.get(index).getText().equals(" ")) {
+            temp = word.get(0);
+            firstLetterInLine.put(temp.getLine(), temp);
+        }
+        return _contents.get(index);
+    }
+
+    private void undo() {
+        UndoList.Node node = _addedCharacters.getNode();
+        if (node == null) {
+            return;
+        }
+        int index = node.getIndex();
+        TextObject text = node.getText();
+        if (node.isDeleted()) {
+            if (node.getText().getText().length() > 1) {
+                String stringContents = text.getText();
+                largeTextInsertion(stringContents);
+                index += text.getText().length();
+            } else {
+                _contents.add(index, text);
+                currX = (int) (text.getX() + text.getWidth() + 0.5);
+                currY = (int) text.getY();
+                _root.getChildren().add(text.getTextObject());
+            }
+        } else {
+            if (node.getText().getText().length() > 1) {
+
+            } else {
+                _contents.remove(text);
+                currX = (int) text.getX();
+                currY = (int) text.getY();
+                _root.getChildren().remove(text.getTextObject());
+            }
+        }
+        _addedCharacters = _addedCharacters.getPrev();
+        contentsIndex = index;
+    }
+
+    private void redo() {
+        if(_addedCharacters.getTail() == null) {
+            return;
+        }
+        UndoList.Node node = _addedCharacters.getTail().getNode();
+        TextObject redoText = node.getText();
+        int index = node.getIndex();
+        if (node.isDeleted()) {
+            _contents.remove(redoText);
+            contentsIndex -= 1;
+            currX = (int) redoText.getX();
+            currY = (int) redoText.getY();
+            _root.getChildren().remove(redoText.getTextObject());
+        } else {
+            _contents.add(index, redoText);
+            currX = (int) (redoText.getX() + redoText.getWidth() + 0.5);
+            currY = (int) redoText.getY();
+            _root.getChildren().add(redoText.getTextObject());
+        }
+        _addedCharacters = _addedCharacters.getTail();
+        contentsIndex = index;
+    }
+
+    private void resize(int size) {
+        fontSize = size;
+        for (int i = 0; i < _contents.size(); i += 1) {
+            _contents.get(i).getTextObject().setFont(new Font(fontName, fontSize));
+        }
+        if (contentsIndex < 0) {
+            return;
+        } else if (contentsIndex == 0) {
+            setCursor(MARGIN_WIDTH, 0);
+        } else {
+            TextObject temp = _contents.get(contentsIndex - 1);
+            setCursor((int) (temp.getX() + temp.getWidth() + 0.5), (int) temp.getY());
+        }
+    }
+
+    private ArrayList<TextObject> getEntireWord(int index) {
+        ArrayList<TextObject> word = new ArrayList<>();
+        int wordBeginIndex = index;
+        int wordEndIndex = index + 1;
+        while (wordBeginIndex >= 0) {
+            TextObject temp = _contents.get(wordBeginIndex);
+            if (temp.getText().equals(" ")) {
+                break;
+            }
+            word.add(0, temp);
+            wordBeginIndex -= 1;
+        }
+        while (wordEndIndex < _contents.size()) {
+            TextObject temp = _contents.get(wordEndIndex);
+            if (_contents.get(wordEndIndex).getText().equals(" ")){
+                break;
+            }
+            word.add(temp);
+            wordEndIndex += 1;
+        }
+        return word;
+    }
+
+    private void copy() {
+        Clipboard clipboard = Clipboard.getSystemClipboard();
+        ClipboardContent newContent = new ClipboardContent();
+        newContent.putString(highlightedText);
+        clipboard.setContent(newContent);
+    }
+
+    private void paste() {
+        Clipboard clipboard = Clipboard.getSystemClipboard();
+        String stringContents = clipboard.getString();
+        UndoList nextUndo = largeTextInsertion(stringContents);
+        _addedCharacters.setTail(nextUndo);
+        if (_addedCharacters.getTail() != null) {
+            nextUndo.setPrev(_addedCharacters);
+            _addedCharacters = nextUndo;
+        }
+    }
+
+    private UndoList largeTextInsertion(String s) {
+        String stringContents = s;
+        TextObject firstText = setCharacter(stringContents.charAt(0));
+        if (stringContents != "") {
+            String characters = stringContents.substring(1);
+            TextObject temp = null;
+            for (char c : characters.toCharArray()) {
+                if (c == '\n') {
+                    temp = setNewLine();
+                } else {
+                    temp = setCharacter(c);
+                }
+            }
+            UndoList undoList = new UndoList(contentsIndex, firstText, false);
+            contentsIndex += stringContents.length();
+            currX = (int) (temp.getX() + temp.getWidth() + 0.5);
+            currY = (int) temp.getY();
+            currLine = temp.getLine();
+            return undoList;
+        }
+        return null;
     }
 
     private void makeCursorBlink() {
@@ -761,6 +853,47 @@ public class Editor extends Application {
         scene.setOnMouseDragged(mouseEventHandler);
         scene.setOnMouseReleased(mouseEventHandler);
 
+        scene.widthProperty().addListener(new ChangeListener<Number>() {
+            @Override
+            public void changed(ObservableValue<? extends Number> observable,
+                                Number oldScreenWidth,
+                                Number newScreenWidth) {
+               WINDOW_WIDTH = newScreenWidth.intValue();
+               format();
+               TextObject temp;
+               if (contentsIndex >= _contents.size()) {
+                   temp = _contents.get(_contents.size() - 1);
+                   setCursor((int) (temp.getX() + temp.getWidth() + 0.5), (int) temp.getY());
+               } else {
+                   temp = _contents.get(contentsIndex);
+                   setCursor((int) temp.getX(), (int) temp.getY());
+               }
+            }
+        });
+        scene.heightProperty().addListener(new ChangeListener<Number>() {
+            @Override public void changed(
+                    ObservableValue<? extends Number> observableValue,
+                    Number oldScreenHeight,
+                    Number newScreenHeight) {
+                WINDOW_HEIGHT = newScreenHeight.intValue();
+                format();
+                TextObject temp;
+                if (contentsIndex >= _contents.size()) {
+                    temp = _contents.get(_contents.size() - 1);
+                    setCursor((int) (temp.getX() + temp.getWidth() + 0.5), (int) temp.getY());
+                } else {
+                    temp = _contents.get(contentsIndex);
+                    setCursor((int) temp.getX(), (int) temp.getY());
+                }
+            }
+        });
+
+        /**
+        ScrollBar scrollBar = new ScrollBar();
+        scrollBar.setOrientation(Orientation.VERTICAL);
+        scrollBar.setPrefHeight(WINDOW_HEIGHT);
+        **/
+
         primaryStage.setTitle("Editor");
 
         primaryStage.setScene(scene);
@@ -779,10 +912,6 @@ public class Editor extends Application {
             }
             editFile = file;
             launch(args);
-        } else if (args.length == 2) {
-            if (args[1].equals("debug")) {
-
-            }
         }
     }
 }
